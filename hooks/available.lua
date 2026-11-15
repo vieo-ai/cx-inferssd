@@ -1,53 +1,29 @@
---- Returns a list of available versions for the tool
+--- Query available versions from upstream InferSSD repository
 --- Documentation: https://mise.jdx.dev/tool-plugin-development.html#available-hook
---- @param ctx {args: string[]} Context (args = user arguments)
---- @return table[] List of available versions
 function PLUGIN:Available(ctx)
-    local http = require("http")
-    local json = require("json")
+    local os_type = RUNTIME.osType:lower()
+    local is_win = (os_type == "windows")
+    local dev_null = is_win and "2>nul" or "2>/dev/null"
 
-    -- Example 1: GitHub Tags API (most common)
-    -- Replace <GITHUB_USER>/<GITHUB_REPO> with your tool's repository
-    local repo_url = "https://api.github.com/repos/<GITHUB_USER>/<GITHUB_REPO>/tags"
+    local cmd = string.format("git ls-remote --tags https://github.com/wici-ai/inferssd.git %s", dev_null)
+    local p = io.popen(cmd)
+    local versions = {}
 
-    -- Example 2: GitHub Releases API (for tools that use GitHub releases)
-    -- local repo_url = "https://api.github.com/repos/<GITHUB_USER>/<GITHUB_REPO>/releases"
-
-    -- For api.github.com requests, mise attaches a configured GitHub token automatically.
-    -- Do not read tokens or construct Authorization headers in the plugin. See README.md
-    -- for the supported private-repository setup.
-    local resp, err = http.get({
-        url = repo_url,
-    })
-
-    if err ~= nil then
-        error("Failed to fetch versions: " .. err)
-    end
-    if resp.status_code ~= 200 then
-        error("GitHub API returned status " .. resp.status_code .. ": " .. resp.body)
+    if p then
+        for line in p:lines() do
+            local tag = line:match("refs/tags/(v?[%d%.]+)$")
+            if tag then
+                table.insert(versions, { version = tag })
+            end
+        end
+        p:close()
     end
 
-    local tags = json.decode(resp.body)
-    local result = {}
-
-    -- Process tags/releases
-    for _, tag_info in ipairs(tags) do
-        local version = tag_info.name
-
-        -- Clean up version string (remove 'v' prefix if present)
-        -- version = version:gsub("^v", "")
-
-        -- For releases API, you might want:
-        -- local version = tag_info.tag_name:gsub("^v", "")
-        -- local is_prerelease = tag_info.prerelease or false
-        -- local note = is_prerelease and "pre-release" or nil
-
-        table.insert(result, {
-            version = version,
-            note = nil, -- Optional: "latest", "lts", "pre-release", etc.
-            -- addition = {} -- Optional: additional tools/components
-        })
+    -- Fallback release version if git ls-remote failed or returned empty
+    if #versions == 0 then
+        table.insert(versions, { version = "v0.1.4" })
     end
 
-    return result
+    table.insert(versions, { version = "latest" })
+    return versions
 end
