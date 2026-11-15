@@ -165,26 +165,42 @@ function PLUGIN:PostInstall(ctx)
         local stage_dir = join_path(clause_temp_dir, "inferssd-mac-" .. tostring(os.time()))
         write_clause_log("Fetching macOS release manifest (" .. listing_url .. ")...", "INFO")
 
-        local sh_script = string.format([[
-            set -euo pipefail
-            stage=%q
-            target=%q
-            mkdir -p "$stage" "$target"
-            trap 'rm -rf "$stage"' EXIT
-            curl -fsSL --retry 3 -o "$stage/latest-macos.json" %q
-            schema=$(plutil -extract schema raw -o - "$stage/latest-macos.json")
-            [ "$schema" = "inferssd-package 1" ] || { echo "Unsupported macOS package manifest" >&2; exit 1; }
-            pkg_name=$(plutil -extract name raw -o - "$stage/latest-macos.json")
-            pkg_url=$(plutil -extract url raw -o - "$stage/latest-macos.json")
-            pkg_sha=$(plutil -extract sha256 raw -o - "$stage/latest-macos.json" | tr '[:upper:]' '[:lower:]')
-            curl -fL --retry 3 -o "$stage/package.tar.gz" "$pkg_url"
-            actual=$(shasum -a 256 "$stage/package.tar.gz" | awk '{print $1}' | tr '[:upper:]' '[:lower:]')
-            [ "$actual" = "$pkg_sha" ] || { echo "SHA256 checksum mismatch on macOS archive" >&2; exit 1; }
-            tar -xzf "$stage/package.tar.gz" -C "$stage"
-            cp -Rf "$stage/$pkg_name"/. "$target"/
-        ]], stage_dir, target_dir, listing_url)
+        local sh_script = string.format([[#!/usr/bin/env bash
+set -euo pipefail
+stage='%s'
+target='%s'
+listing_url='%s'
 
-        run_cmd(string.format("bash -c %q", sh_script))
+mkdir -p "$stage" "$target"
+trap 'rm -rf "$stage"' EXIT
+
+curl -fsSL --retry 3 -o "$stage/latest-macos.json" "$listing_url"
+schema=$(plutil -extract schema raw -o - "$stage/latest-macos.json")
+[ "$schema" = "inferssd-package 1" ] || { echo "Unsupported macOS package manifest" >&2; exit 1; }
+
+pkg_name=$(plutil -extract name raw -o - "$stage/latest-macos.json")
+pkg_url=$(plutil -extract url raw -o - "$stage/latest-macos.json")
+pkg_sha=$(plutil -extract sha256 raw -o - "$stage/latest-macos.json" | tr '[:upper:]' '[:lower:]')
+
+curl -fL --retry 3 -o "$stage/package.tar.gz" "$pkg_url"
+actual=$(shasum -a 256 "$stage/package.tar.gz" | awk '{print $1}' | tr '[:upper:]' '[:lower:]')
+[ "$actual" = "$pkg_sha" ] || { echo "SHA256 checksum mismatch on macOS archive" >&2; exit 1; }
+
+tar -xzf "$stage/package.tar.gz" -C "$stage"
+cp -Rf "$stage/$pkg_name"/. "$target"/
+]], stage_dir, target_dir, listing_url)
+
+        local sh_file = join_path(clause_temp_dir, "clause-inferssd-install-" .. tostring(os.time()) .. ".sh")
+        local f_sh = io.open(sh_file, "w")
+        if not f_sh then error("[inferssd] Unable to write transient macOS installer script.") end
+        f_sh:write(sh_script)
+        f_sh:close()
+
+        local ok, err = pcall(function()
+            run_cmd(string.format('bash "%s"', sh_file))
+        end)
+        if test_path(sh_file) then os.remove(sh_file) end
+        if not ok then error(err) end
 
         if not test_path(inferssd_bin) or not test_path(resources_json) then
             error("[inferssd] Extracted macOS package is missing bin/inferssd or engine-resources.json.")
@@ -307,11 +323,12 @@ function PLUGIN:PostInstall(ctx)
         end
     end
 
-    local jobs = os.getenv("INFERSSD_JOBS") or "4"
+    local jobs = os.getenv("INFERSSD_JOBS") or capture_cmd("nproc 2>/dev/null"):gsub("[\r\n]+", "")
+    if jobs == "" then jobs = "4" end
     local build_dir = join_path(source_dir, "build-" .. preset)
     local venv_bin = join_path(venv_dir, "bin")
 
-    write_clause_log(string.format("Compiling InferSSD native engine (%s%s)...", preset, vulkan_flag), "INFO")
+    write_clause_log(string.format("Compiling InferSSD native engine (%s%s, jobs=%s)...", preset, vulkan_flag, jobs), "INFO")
     run_cmd(string.format(
         'cd "%s" && %sPATH="%s:$PATH" cmake --preset "%s"%s && %sPATH="%s:$PATH" cmake --build "%s" --parallel "%s" --target %s',
         source_dir, cuda_env, venv_bin, preset, vulkan_flag, cuda_env, venv_bin, build_dir, jobs, build_targets
