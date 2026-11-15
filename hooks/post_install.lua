@@ -99,6 +99,7 @@ function PLUGIN:PostInstall(ctx)
 
         local ps_script = string.format([[
             $ErrorActionPreference = 'Stop'
+            $ProgressPreference = 'SilentlyContinue'
             Add-Type -AssemblyName System.IO.Compression.FileSystem
             $stage = '%s'
             $target = '%s'
@@ -113,7 +114,14 @@ function PLUGIN:PostInstall(ctx)
                 $archive = Join-Path $stage $pkg.file
                 Write-Host ("[inferssd][INFO] Downloading " + $pkg.file + " (" + [math]::Ceiling($pkg.size / 1000000) + " MB)...")
                 Invoke-WebRequest -UseBasicParsing -Uri $pkg.url -OutFile $archive
-                $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+                $sha = [Security.Cryptography.SHA256]::Create()
+                $stream = [IO.File]::OpenRead($archive)
+                try {
+                    $actual = [BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-', '').ToLowerInvariant()
+                } finally {
+                    $sha.Dispose()
+                    $stream.Dispose()
+                }
                 if ($actual -ne $pkg.sha256.ToLowerInvariant()) {
                     throw 'SHA256 checksum mismatch on downloaded Windows archive.'
                 }
