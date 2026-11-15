@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
-#MISE description="Run plugin tests - install and execute tool"
 set -euo pipefail
 
-mise plugin link --force <TOOL> .
+echo "[test] Linking local inferssd plugin..."
+mise plugins link --force inferssd .
 mise cache clear
-mise install <TOOL>@1.0.0
 
-# Capture and display the output while also verifying it
-output=$(mise exec "<TOOL>@1.0.0" -- "<TOOL>" --version)
-echo "<TOOL> output: $output"
+echo "[test] Ensuring prerequisite uv is installed..."
+mise use -g uv@latest || mise install uv@latest
 
-if echo "$output" | grep -q '<TOOL>@1.0.0'; then
-    echo "✓ Tests passed"
-else
-    echo "✗ Test failed: expected version <TOOL>@1.0.0"
-    exit 1
-fi
+echo "[test] Installing inferssd@v0.1.4..."
+mise install inferssd@v0.1.4
+
+echo "[test] Verifying InferSSD installation and CLI shims..."
+mise exec inferssd@v0.1.4 -- inferssd --version --json
+mise exec inferssd@v0.1.4 -- inferssd cli --help
+mise exec inferssd@v0.1.4 -- inferssd serve --help
+
+echo "[test] Verified InferSSD successfully provisioned."
